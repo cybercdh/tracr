@@ -39,6 +39,11 @@ func main() {
 	flag.BoolVar(&verbose, "v", false, "Enable verbose output showing all attempts")
 	flag.Parse()
 
+	if concurrency < 1 {
+		fmt.Fprintf(os.Stderr, "-c must be at least 1 (got %d)\n", concurrency)
+		os.Exit(2)
+	}
+
 	// Initialize domain tracking container to prevent duplicate processing
 	container := Container{
 		seen: make(map[string]bool),
@@ -63,15 +68,13 @@ func main() {
 		go func() {
 			defer refusalGroup.Done()
 			for target := range refusals {
-				// Skip domains we've already processed
-				if container.isSeen(target.domain) {
+				// Skip domains we've already processed (atomic check-and-mark)
+				if !container.markSeen(target.domain) {
 					if verbose {
-						fmt.Printf("[SKIP] Already checked: %s\n", target.domain)
+						fmt.Fprintf(os.Stderr, "[SKIP] Already checked: %s\n", target.domain)
 					}
 					continue
 				}
-
-				container.addToSeen(target.domain)
 
 				// Test for dangling nameserver vulnerability
 				isVulnerable, err := CheckForRefusal(&target)
@@ -96,9 +99,7 @@ func main() {
 
 	// Read domains from stdin or command line argument
 	if err := GetUserInput(); err != nil {
-		if verbose {
-			color.Red.Printf("[ERROR] Failed to read input: %v\n", err)
-		}
+		fmt.Fprint(os.Stderr, color.Red.Sprintf("[ERROR] Failed to read input: %v\n", err))
 		os.Exit(1)
 	}
 
